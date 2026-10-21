@@ -46,7 +46,11 @@ Le bootstrap est volontairement nommé `schema.sql` : aucune migration n’a ét
 
 ## Prévisualisation Vercel
 
-Projet : `nailpilot-v1-preview`. Branche de travail : `codex/nailpilot-mvp`. `main` reste au commit initial et ses déploiements automatiques sont désactivés dans `vercel.json`. Déployer explicitement avec la cible `preview`, jamais `production`. Pas de Vercel Cron, fonction payante, domaine ou base externe provisionné.
+Projet : `nailpilot-v1-preview`. Branche de travail : `codex/nailpilot-mvp`. `main` reste au commit initial et ses déploiements automatiques sont désactivés dans `vercel.json`. Pas de Vercel Cron, fonction payante, domaine acheté ou base externe provisionné.
+
+**Projet actuellement en pause.** Une première requête avec `target: "preview"` a été retournée par Vercel comme `target: "production"`. L’annulation est arrivée après la fin du build. Le nouveau projet a été mis en pause et l’attribution automatique des domaines a été désactivée. Une seconde demande conforme à la documentation (champ `target` omis) a créé une vraie prévisualisation (`target: null`), mais son état est `BLOCKED` car le projet est en pause. Aucun autre projet Vercel et aucune base Supabase n’ont été modifiés. Ne pas présenter ces URL comme une prévisualisation fonctionnelle.
+
+Avant reprise : retirer le déploiement classé production, puis réactiver uniquement ce projet et relancer le déploiement preview. Pour l’API Vercel, omettre `target` pour une prévisualisation, puis **vérifier le `target` retourné avant de poursuivre**. Voir `docs/RAPPORT-2026-10-21.md` pour les identifiants et résultats.
 
 La CI GitHub vérifie les tests, le build et les parcours Chromium sur les branches `codex/**` et les PR vers `main`. Elle ne déploie pas et n’applique aucun SQL. Les dépendances sont épinglées et le lockfile est versionné.
 
