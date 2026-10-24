@@ -645,7 +645,8 @@ export function mapsLink(address) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
-const icsText = value => String(value ?? '').replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/([,;])/g, '\\$1');
+// Any CR, LF or CRLF becomes an escaped \n: a lone CR must not start a new iCalendar property (audit 2026-10).
+const icsText = value => String(value ?? '').replace(/\\/g, '\\\\').replace(/\r\n|\r|\n/g, '\\n').replace(/([,;])/g, '\\$1');
 const icsDate = iso => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 /** RFC 5545 single event, CRLF line endings, UTC times. */
 export function icsEvent({ title, starts_at, ends_at, location = '', description = '', uid, now = new Date() }) {

@@ -136,3 +136,15 @@ test('store: SQL and auth errors map to stable codes', () => {
   const already = Object.assign(new Error('x'), { code: 'overlap' });
   assert.equal(toAppError(already), already);
 });
+
+// Audit sécurité 2026-10 : le téléphone seul ne rattache pas une demande à une fiche existante.
+test('audit: public demo booking with a known phone but another name creates a separate record', async () => {
+  const start = await firstSlot();
+  await api.requestBooking(booking(start, { phone: '0600000001', firstName: 'Intrus', lastName: 'Inconnu', email: 'pirate@evil.test', refillOptIn: true }));
+  await store.load();
+  const victim = store.state.clients.find(c => c.id === 'demo-c1');
+  assert.equal(victim.email, ''); assert.equal(store.state.consents.filter(k => k.client_id === 'demo-c1' && k.source === 'online_form').length, 0);
+  const a = store.state.appointments.find(x => x.starts_at === start && x.source === 'online');
+  assert.notEqual(a.client_id, 'demo-c1');
+  assert.equal(store.state.clients.find(c => c.id === a.client_id).name, 'Intrus Inconnu');
+});

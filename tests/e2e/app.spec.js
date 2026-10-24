@@ -159,3 +159,30 @@ test('fiches clientes : échappement, recherche, archivage', async ({ page }) =>
   await expect(page.locator('.client-row')).toHaveCount(0);
   await noHorizontalScroll(page);
 });
+
+// Audit sécurité 2026-10 : données hostiles (pro → page publique, cliente → espace pro) toujours échappées.
+test('audit XSS : nom, bio, prestation, notes et adresse hostiles restent du texte', async ({ page }) => {
+  const payload = '<img src=x onerror="window.__xss=1">"\'><svg onload="window.__xss=2">';
+  await page.goto('/#/aujourdhui');
+  await expect(page.locator('#main')).toBeVisible();
+  await page.evaluate(p => {
+    const data = JSON.parse(localStorage.getItem('nailpilot-demo-v2'));
+    data.publicProfile.display_name = `Studio ${p}`.slice(0, 80);
+    data.publicProfile.bio = p;
+    data.services[0].name = `Pose ${p}`.slice(0, 80);
+    data.services[0].description = p;
+    data.clients[0].notes = p;
+    data.clients[0].preferred_name = p;
+    data.addresses[0].access_info = p;
+    data.appointments.forEach(a => { a.client_message = p; a.access_info = p; });
+    localStorage.setItem('nailpilot-demo-v2', JSON.stringify(data));
+  }, payload);
+  for (const url of ['/r/studio-demo', '/#/clientes/demo-c1', '/#/clientes/demo-c2', '/#/demandes', '/#/aujourdhui']) {
+    await page.goto(url);
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('img[src="x"], svg[onload]')).toHaveCount(0);
+    expect(await page.evaluate(() => window.__xss)).toBeUndefined();
+  }
+  await page.goto('/r/studio-demo');
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('<img src=x');
+});

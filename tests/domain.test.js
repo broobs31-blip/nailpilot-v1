@@ -374,3 +374,24 @@ test('F11 refill uses appointment snapshot, honours refill_enabled and pending b
   const kept = { id: 'x:new_request', kind: 'new_request', status: 'ready' };
   assert.deepEqual(D.reconcileNotifications([kept], [c], [], NOW), [kept], 'event notifications are not invalidated');
 });
+
+// Audit sécurité 2026-10 : un CR isolé ne doit pas injecter de propriété iCalendar.
+test('audit: ics escapes lone CR, LF and CRLF (no property injection)', () => {
+  const ics = D.icsEvent({ title: 'Pose\rATTACH:http://evil.test/x', starts_at: '2026-11-18T08:30:00Z', ends_at: '2026-11-18T09:30:00Z', location: 'A\r\nURL:http://evil.test\nB', now: NOW });
+  const lines = ics.split('\r\n');
+  assert.ok(!lines.some(l => /^(ATTACH|URL):/.test(l)), ics);
+  assert.ok(!/\r(?!\n)/.test(ics), 'no bare CR left');
+  assert.ok(lines.includes('SUMMARY:Pose\\nATTACH:http://evil.test/x'));
+});
+
+// Audit sécurité 2026-10 : en-têtes Vercel (CSP stricte, anti-iframe, HSTS, COOP).
+test('audit: vercel.json keeps a strict CSP and security headers', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const config = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
+  const headers = Object.fromEntries(config.headers.find(h => h.source === '/(.*)').headers.map(h => [h.key, h.value]));
+  const csp = headers['Content-Security-Policy'];
+  assert.match(csp, /script-src 'self'(;|$)/); assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|\*;|\* /);
+  for (const directive of ["object-src 'none'", "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'"]) assert.ok(csp.includes(directive), directive);
+  assert.equal(headers['X-Frame-Options'], 'DENY'); assert.equal(headers['X-Content-Type-Options'], 'nosniff');
+  assert.match(headers['Strict-Transport-Security'], /max-age=\d{8,}/); assert.equal(headers['Cross-Origin-Opener-Policy'], 'same-origin');
+});

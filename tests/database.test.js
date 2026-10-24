@@ -365,7 +365,7 @@ test('database V2: returning client keeps earlier consent, gains new one, e-mail
   await asAdmin();
   await db.exec(`update public.np_clients set refill_opt_in=false where id='${client}'`);
   await asAnon();
-  await request(await iso('09:00'), { p_phone: '0600000001', p_reminder_opt_in: false, p_refill_opt_in: true, p_email: 'a@b.fr' });
+  await request(await iso('09:00'), { p_phone: '0600000001', p_first_name: ' cliente ', p_last_name: 'TEST', p_reminder_opt_in: false, p_refill_opt_in: true, p_email: 'a@b.fr' });
   await as(owner);
   const c = (await db.query(`select * from public.np_clients where id='${client}'`)).rows[0];
   assert.deepEqual([c.reminder_opt_in, c.refill_opt_in, c.email, c.source], [true, true, 'a@b.fr', 'manual']);
@@ -409,4 +409,64 @@ test('database V2: client deletion cascades addresses/notifications; account del
   assert.equal((await db.query('select public.np_public_page($1) as p', [slug])).rows[0].p, null);
   await assert.rejects(sqlSlots(), errCode('NP404'));
   await assert.rejects(request(await iso('10:00')), errCode('NP404'));
+});
+
+// ===========================================================================
+// Audit sécurité 2026-10 (docs/AUDIT-SECURITE.md) — non-régression
+// ===========================================================================
+test('audit: a known phone with another name never hijacks the existing client record', async () => {
+  await asAdmin();
+  await db.exec(`update public.np_clients set refill_opt_in=false, email='' where id='${client}'`);
+  await asAnon();
+  await request(await iso('09:00'), { p_phone: '0600000001', p_first_name: 'Intrus', p_last_name: 'Inconnu', p_refill_opt_in: true, p_email: 'pirate@evil.test' });
+  await as(owner);
+  const victim = (await db.query(`select email, refill_opt_in from public.np_clients where id='${client}'`)).rows[0];
+  assert.deepEqual([victim.email, victim.refill_opt_in], ['', false], 'victim record untouched');
+  assert.equal((await db.query(`select * from public.np_consents where client_id='${client}' and source='online_form'`)).rows.length, 0);
+  const appt = (await db.query(`select a.client_id, c.name, c.phone from public.np_appointments a join public.np_clients c on c.id=a.client_id where a.source='online'`)).rows[0];
+  assert.notEqual(appt.client_id, client); assert.equal(appt.name, 'Intrus Inconnu'); assert.equal(appt.phone, '+33600000001');
+});
+test('audit: spoofed X-Forwarded-For does not bypass the IP limit when cf-connecting-ip is present', async () => {
+  await asAnon();
+  const starts = ['09:00', '10:30', '12:00', '14:00', '15:30', '17:00'];
+  for (const [i, t] of starts.entries()) {
+    await db.exec(`set request.headers = '{"cf-connecting-ip":"203.0.113.7","x-forwarded-for":"10.0.0.${i}, 198.51.100.1"}'`);
+    const run = request(await iso(t), { p_phone: `06000000${10 + i}` });
+    if (i < 5) await run; else await assert.rejects(run, errCode('NP429'));
+  }
+  await db.exec(`reset request.headers`);
+});
+test('audit: junk IP header is ignored, per-pro hourly cap stops phone rotation', async () => {
+  await asAdmin();
+  await db.exec(`insert into public.np_booking_attempts(owner_id, phone_key, ip_key) select '${owner}', md5('x' || g), null from generate_series(1, 20) g`);
+  await asAnon();
+  await db.exec(`set request.headers = '{"x-forwarded-for":"<script>, 1.1.1.1"}'`);
+  await assert.rejects(request(await iso('09:00'), { p_phone: '0677777777' }), errCode('NP429'));
+  await db.exec(`reset request.headers`);
+  await asAdmin();
+  await db.exec(`update public.np_booking_attempts set created_at = now() - interval '2 hours'`);
+  await asAnon();
+  assert.equal((await request(await iso('09:00'), { p_phone: '0677777777' })).rows[0].r.status, 'pending');
+});
+test('audit: per-pro cap of 15 live pending online requests', async () => {
+  await asAdmin();
+  await db.exec(`insert into public.np_appointments(owner_id,client_id,service_name,duration_min,starts_at,status,source,expires_at)
+    select '${owner}','${client}'::uuid,'X',60,(('${day}'::date + g) + time '10:00') at time zone 'Europe/Paris','pending','online',now()+interval '1 hour'
+    from generate_series(1, 15) g`);
+  await asAnon();
+  await assert.rejects(request(await iso('09:00'), { p_phone: '0688888888' }), errCode('NP429'));
+});
+test('audit: over-long public input is refused with NP422, never a constraint error leaking the row', async () => {
+  await asAnon();
+  const long = 'x'.repeat(201);
+  await assert.rejects(request(await iso('10:00'), { p_location: 'client', p_address_line: long, p_postal_code: '31200', p_city: 'Toulouse' }), errCode('NP422'));
+  await assert.rejects(request(await iso('10:00'), { p_location: 'client', p_address_line: '1 rue A', p_postal_code: '31200', p_city: 'y'.repeat(81) }), errCode('NP422'));
+  const r = (await request(await iso('10:00'), { p_first_name: 'a'.repeat(60), p_last_name: 'b'.repeat(60), p_phone: '0612345678' })).rows[0].r;
+  assert.equal(r.status, 'pending', '60 + 60 characters fit the 120-character name');
+});
+test('audit: anon and authenticated cannot use the rate-limit sequence', async () => {
+  for (const role of [asAnon, () => as(owner)]) {
+    await role();
+    await assert.rejects(db.query(`select nextval('public.np_booking_attempts_id_seq')`), /permission denied/);
+  }
 });

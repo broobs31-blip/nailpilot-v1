@@ -269,6 +269,7 @@ create table public.np_booking_attempts (
 );
 create index np_booking_attempts_phone_idx on public.np_booking_attempts(phone_key, created_at);
 create index np_booking_attempts_ip_idx on public.np_booking_attempts(ip_key, created_at) where ip_key is not null;
+create index np_booking_attempts_owner_idx on public.np_booking_attempts(owner_id, created_at);
 
 -- ---------------------------------------------------------------------------
 -- Privileges and RLS
@@ -288,6 +289,8 @@ alter table public.np_booking_attempts enable row level security;
 revoke all on public.np_profiles, public.np_public_profiles, public.np_opening_hours, public.np_closures,
   public.np_services, public.np_clients, public.np_client_addresses, public.np_consents,
   public.np_appointments, public.np_notifications, public.np_booking_attempts from public, anon, authenticated;
+-- Supabase default privileges also grant sequences to anon/authenticated.
+revoke all on sequence public.np_booking_attempts_id_seq from public, anon, authenticated;
 
 grant select, insert, update on public.np_profiles, public.np_public_profiles to authenticated;
 grant select, insert, update, delete on public.np_opening_hours, public.np_closures, public.np_services,
@@ -632,8 +635,13 @@ declare
   v_service public.np_services;
   v_phone text;
   v_email text := lower(btrim(coalesce(p_email, '')));
-  v_name text := btrim(coalesce(p_first_name, '')) || ' ' || btrim(coalesce(p_last_name, ''));
-  v_ip text := nullif(btrim(split_part(coalesce(current_setting('request.headers', true)::jsonb ->> 'x-forwarded-for', ''), ',', 1)), '');
+  v_name text := left(btrim(coalesce(p_first_name, '')) || ' ' || btrim(coalesce(p_last_name, '')), 120);
+  v_headers jsonb := coalesce(nullif(current_setting('request.headers', true), ''), '{}')::jsonb;
+  -- Audit 2026-10: the left-most X-Forwarded-For entry is client-controlled. Prefer cf-connecting-ip,
+  -- which Cloudflare (in front of Supabase) overwrites; fall back to X-Forwarded-For. Anything that is
+  -- not an IP literal is ignored. The per-pro caps below hold even when the IP is spoofed.
+  v_ip text := nullif(btrim(coalesce(nullif(btrim(v_headers ->> 'cf-connecting-ip'), ''),
+    split_part(coalesce(v_headers ->> 'x-forwarded-for', ''), ',', 1))), '');
   v_phone_key text;
   v_ip_key text;
   v_client uuid;
@@ -663,13 +671,24 @@ begin
   if p_location = 'client' and (btrim(coalesce(p_address_line, '')) = '' or coalesce(p_postal_code, '') !~ '^[0-9]{5}$' or btrim(coalesce(p_city, '')) = '') then
     raise exception using errcode = 'NP422', message = 'Adresse d’intervention incomplète.';
   end if;
+  -- Explicit bounds: a CHECK violation would echo the failing row (owner_id, client_id) to anon.
+  if p_location = 'client' and (length(btrim(p_address_line)) > 200 or length(btrim(p_city)) > 80) then
+    raise exception using errcode = 'NP422', message = 'Adresse d’intervention trop longue.';
+  end if;
+  if v_ip is not null and (length(v_ip) > 45 or v_ip !~ '^[0-9A-Fa-f:.]+$') then v_ip := null; end if;
 
   -- Rate limits (F8, R5). Rows inserted by a failed request roll back with it.
+  -- Per phone and per IP: 5/hour. Per pro (audit 2026-10, spoofable IP + rotating phones):
+  -- 20 successful online requests/hour and 15 live pending requests at most, so a bot
+  -- cannot fill the agenda nor the client list. Raise both once Turnstile is in place.
   delete from public.np_booking_attempts b where b.created_at < now() - interval '1 day';
   v_phone_key := md5('np-phone:' || v_phone);
   v_ip_key := case when v_ip is null then null else md5('np-ip:' || v_ip) end;
   if (select count(*) from public.np_booking_attempts b where b.phone_key = v_phone_key and b.created_at > now() - interval '1 hour') >= 5
      or (v_ip_key is not null and (select count(*) from public.np_booking_attempts b where b.ip_key = v_ip_key and b.created_at > now() - interval '1 hour') >= 5)
+     or (select count(*) from public.np_booking_attempts b where b.owner_id = v_profile.owner_id and b.created_at > now() - interval '1 hour') >= 20
+     or (select count(*) from public.np_appointments a where a.owner_id = v_profile.owner_id and a.source = 'online'
+         and a.status = 'pending' and a.expires_at > now()) >= 15
      or (select count(*) from public.np_appointments a join public.np_clients c on c.id = a.client_id
          where a.owner_id = v_profile.owner_id and a.status = 'pending' and c.phone = v_phone) >= 3 then
     raise exception using errcode = 'NP429', message = 'Trop de demandes. Réessayez plus tard ou contactez directement la professionnelle.';
@@ -687,8 +706,14 @@ begin
   select s.* into v_service from public.np_services s where s.id = p_service_id and s.owner_id = v_profile.owner_id;
 
   perform set_config('np.consent_source', 'online_form', true);
+  -- Audit 2026-10: the phone alone is not proof of identity. Attach to an existing record only when
+  -- the phone AND the name match (case/spacing-insensitive); otherwise create a separate record and let
+  -- the pro decide (spec F7 « en cas de doute »). Prevents a stranger who knows a client's number from
+  -- booking under her identity, filling her e-mail or granting consents on her behalf.
   select c.id into v_client from public.np_clients c
-  where c.owner_id = v_profile.owner_id and c.phone = v_phone and not c.archived order by c.created_at limit 1;
+  where c.owner_id = v_profile.owner_id and c.phone = v_phone and not c.archived
+    and lower(regexp_replace(btrim(c.name), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim(v_name), '[[:space:]]+', ' ', 'g'))
+  order by c.created_at limit 1;
   if v_client is null then
     insert into public.np_clients(owner_id, name, phone, email, source, reminder_opt_in, refill_opt_in)
     values (v_profile.owner_id, v_name, v_phone, v_email, 'online', coalesce(p_reminder_opt_in, false), coalesce(p_refill_opt_in, false))

@@ -133,7 +133,7 @@ Toutes les tables portent le préfixe `np_` et ont RLS activé. `owner_id = auth
 | `np_export_account()` | authenticated | INVOKER | `jsonb` |
 | `np_request_account_deletion()` | authenticated | INVOKER | `void` (dépublie immédiatement ; effacement par un job service_role sous 30 j, Lot 1 manuel) |
 
-`p_website` est le champ « pot de miel ». Codes d'erreur : `NP404` introuvable, `NP403` lieu ou zone refusés, `NP409` créneau pris, `NP422` saisie invalide, `NP429` trop de demandes, `23P01` chevauchement.
+`p_website` est le champ « pot de miel ». Rattachement à une fiche existante : téléphone normalisé **et** nom identique (casse et espaces ignorés), sinon nouvelle fiche (la pro décide). Limites : 5/h par téléphone, 5/h par IP (`cf-connecting-ip`, à défaut `x-forwarded-for`), 20 demandes/h et 15 demandes `pending` vivantes par pro, 3 `pending` par téléphone (voir `docs/AUDIT-SECURITE.md`). Codes d'erreur : `NP404` introuvable, `NP403` lieu ou zone refusés, `NP409` créneau pris, `NP422` saisie invalide, `NP429` trop de demandes, `23P01` chevauchement.
 
 **Hors base au Lot 1** : la vérification du captcha Turnstile exige un secret serveur. Elle sera ajoutée par une Edge Function `book` qui vérifie le jeton puis appelle `np_request_booking` avec `service_role`, dès qu'un projet hébergé existera. Ce jour-là, on retirera `anon` de `np_request_booking` et on ajoutera `challenges.cloudflare.com` à la CSP. D'ici là, le pot de miel et les limites de débit SQL s'appliquent.
 

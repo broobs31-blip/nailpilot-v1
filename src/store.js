@@ -666,7 +666,9 @@ function demoPublicApi(boundSlug) {
       data.bookingAttempts.push({ phone, at: nowIso() });
 
       const service = data.services.find(s => s.id === input.serviceId);
-      let client = data.clients.find(c => c.phone === phone && !c.archived);
+      // Mirror of np_request_booking: attach only when phone AND name match (audit 2026-10).
+      const nameKey = v => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+      let client = data.clients.find(c => c.phone === phone && !c.archived && nameKey(c.name) === nameKey(`${firstName} ${lastName}`));
       if (!client) {
         client = { id: uuid(), owner_id: DEMO_USER.id, name: `${firstName} ${lastName}`, preferred_name: '', phone, email, notes: '', source: 'online', refill_days: 21, reminder_opt_in: input.reminderOptIn === true, refill_opt_in: input.refillOptIn === true, archived: false, created_at: nowIso() };
         data.clients.push(client);
