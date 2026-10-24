@@ -177,3 +177,236 @@ test('database: archive guard, archived client guard and anonymizing deletion', 
   assert.equal(row.client_id, null); assert.ok(row.anonymized_at); assert.equal(row.service_name, 'Remplissage');
   assert.equal((await db.query('select * from public.np_consents')).rows.length, 0);
 });
+
+// ===========================================================================
+// Backend V2 extensions: RLS on every table, anon surface, slots mirror with domain.js,
+// R2/R3/R5 rules, atomic booking, export and deletion (F12).
+// ===========================================================================
+import * as D from '../src/domain.js';
+
+const plain = rows => JSON.parse(JSON.stringify(rows));
+async function domainSlots({ location = 'pro', postal = null, from = day, to = day } = {}) {
+  await asAdmin();
+  const [profile] = plain((await db.query(`select * from public.np_profiles where owner_id=$1`, [owner])).rows);
+  const openingHours = plain((await db.query(`select * from public.np_opening_hours where owner_id=$1`, [owner])).rows);
+  const closures = plain((await db.query(`select * from public.np_closures where owner_id=$1`, [owner])).rows);
+  const appointments = plain((await db.query(`select * from public.np_appointments where owner_id=$1`, [owner])).rows);
+  const [svc] = plain((await db.query(`select * from public.np_services where id=$1`, [service])).rows);
+  return D.availableSlots({ profile, openingHours, closures, appointments, service: svc, location, from, to, postalCode: postal, now: new Date() });
+}
+async function sqlSlots({ location = 'pro', postal = null, from = day, to = day } = {}) {
+  await asAnon();
+  const rows = (await db.query(`select slot_start from public.np_available_slots($1,$2,$3,$4::date,$5::date,$6)`, [slug, service, location, from, to, postal])).rows;
+  return rows.map(r => r.slot_start.toISOString());
+}
+const errCode = code => e => e.code === code;
+// Last Sunday of a month, strictly in the future (DST switch days in Europe/Paris).
+function nextLastSunday(month) {
+  const now = new Date();
+  for (let year = now.getUTCFullYear(); ; year++) {
+    const last = new Date(Date.UTC(year, month, 0));
+    last.setUTCDate(last.getUTCDate() - last.getUTCDay());
+    if (last.getTime() > now.getTime()) return last.toISOString().slice(0, 10);
+  }
+}
+
+test('database V2: RLS isolates select/update/delete/insert on every private table', async () => {
+  await asAdmin();
+  await db.exec(`insert into public.np_closures(owner_id,starts_at,ends_at) values('${other}',now(),now()+interval '1 day');
+    insert into public.np_opening_hours(owner_id,weekday,start_min,end_min) values('${other}',1,540,600);
+    insert into public.np_services(owner_id,name,duration_min) values('${other}','Coupe',45);
+    insert into public.np_client_addresses(owner_id,client_id,address_line,postal_code,city) values('${other}','${foreignClient}','1 rue B','69000','Lyon');
+    insert into public.np_appointments(owner_id,client_id,service_name,duration_min,starts_at) values('${other}','${foreignClient}','Coupe',45,now()+interval '1 day');`);
+  await db.exec(`insert into public.np_notifications(owner_id,client_id,appointment_id,kind,due_at,reference_at)
+    select owner_id,client_id,id,'reminder',now(),starts_at from public.np_appointments where owner_id='${other}'`);
+  await as(owner);
+  const writable = { np_profiles: 'trades', np_public_profiles: 'display_name', np_opening_hours: 'weekday', np_closures: 'reason', np_services: 'name',
+    np_clients: 'name', np_client_addresses: 'label', np_appointments: 'status', np_notifications: 'status' };
+  for (const table of [...TABLES.filter(t => t !== 'np_booking_attempts'), 'np_due_notifications'])
+    assert.equal((await db.query(`select * from public.${table} where owner_id='${other}'`)).rows.length, 0, `select ${table}`);
+  for (const [table, column] of Object.entries(writable))
+    assert.equal((await db.query(`update public.${table} set ${column}=${column} where owner_id='${other}' returning 1`)).rows.length, 0, `update ${table}`);
+  for (const table of ['np_opening_hours', 'np_closures', 'np_services', 'np_clients', 'np_client_addresses'])
+    assert.equal((await db.query(`delete from public.${table} where owner_id='${other}' returning 1`)).rows.length, 0, `delete ${table}`);
+  for (const table of ['np_appointments', 'np_notifications', 'np_consents', 'np_profiles', 'np_public_profiles'])
+    await assert.rejects(db.exec(`delete from public.${table} where owner_id='${other}'`), /permission denied/, `delete ${table}`);
+  await assert.rejects(db.exec(`insert into public.np_services(owner_id,name,duration_min) values('${other}','X',30)`), /row-level security/);
+  await assert.rejects(db.exec(`insert into public.np_closures(owner_id,starts_at,ends_at) values('${other}',now(),now()+interval '1 hour')`), /row-level security/);
+  await assert.rejects(db.exec(`insert into public.np_consents(owner_id,client_id,kind,granted,source) values('${owner}','${client}','reminders',true,'pro')`), /permission denied/);
+  await assert.rejects(db.query('select * from public.np_booking_attempts'), /permission denied/);
+  await assert.rejects(db.exec(`update public.np_appointments set source='online', expires_at=now() where owner_id='${owner}'`), /permission denied/);
+  await as(other);
+  assert.equal((await db.query(`select public.np_export_client('${client}') as x`)).rows[0].x, null);
+  const account = (await db.query('select public.np_export_account() as x')).rows[0].x;
+  assert.deepEqual(account.clients.map(c => c.id), [foreignClient]); assert.equal(account.profile.owner_id, other);
+  assert.ok(account.appointments.every(a => a.owner_id === other) && account.services.every(s => s.owner_id === other));
+});
+test('database V2: anon reaches no private function nor view', async () => {
+  await asAnon();
+  for (const sql of ['select public.np_slug_available($$x$$)', 'select public.np_export_account()', `select public.np_export_client('${client}')`,
+    'select public.np_expire_pending()', 'select public.np_request_account_deletion()', `select public.np_save_opening_hours('[]'::jsonb)`,
+    'select public.np_reorder_services(array[]::uuid[])', 'select * from public.np_due_notifications', `select public.np_normalize_phone('0611223344')`])
+    await assert.rejects(db.exec(sql), /permission denied/, sql);
+  await assert.rejects(db.query(`select * from public.np_available_slots('sofia-coiffure',$1,'client',current_date,current_date)`, [service]), errCode('NP404'));
+  await assert.rejects(db.query(`select * from public.np_available_slots($1,$2,'pro',current_date,current_date + 40)`, [slug, service]), errCode('NP422'));
+});
+test('database V2: column defaults equal domain DEFAULT_PROFILE', async () => {
+  await asAdmin();
+  await db.exec(`delete from public.np_profiles where owner_id='${other}'; insert into public.np_profiles(owner_id) values('${other}')`);
+  const row = (await db.query(`select * from public.np_profiles where owner_id='${other}'`)).rows[0];
+  for (const [k, v] of Object.entries(D.DEFAULT_PROFILE)) assert.deepEqual(row[k], v, k);
+});
+test('database V2: domain.availableSlots mirrors np_available_slots (buffers, pending, closures, client)', async () => {
+  await book('booked', at('14:00'), { location_type: "'client'", address_line: "'2 rue A'", postal_code: "'31000'", city: "'Toulouse'", buffer_before_min: 30, buffer_after_min: 30 });
+  await asAdmin();
+  await db.exec(`insert into public.np_appointments(owner_id,client_id,service_name,duration_min,starts_at,status,source,expires_at,buffer_after_min)
+      values('${owner}','${client}','Pose',90,${at('10:00')},'pending','online',now()+interval '1 hour',10);
+    insert into public.np_closures(owner_id,starts_at,ends_at) values('${owner}',${at('17:00')},${at('19:00')});`);
+  for (const args of [{}, { location: 'client', postal: '31200' }, { location: 'client' }]) {
+    const sql = await sqlSlots(args);
+    assert.ok(sql.length >= 4, `${JSON.stringify(args)} ${sql.map(D.parisLocal)}`);
+    assert.deepEqual(await domainSlots(args), sql, JSON.stringify(args));
+  }
+  const free = (await sqlSlots()).map(D.parisLocal).map(x => x.slice(11));
+  assert.deepEqual(free, ['12:00', '12:30', '15:30', '16:00']); // pending 10:00-11:30 (+10), client 14:00 (±30), closure 17:00
+});
+test('database V2: DST days — no slot in the missing or repeated hour, SQL = domain', async () => {
+  await asAdmin();
+  await db.exec(`update public.np_profiles set max_horizon_days=366 where owner_id='${owner}';
+    delete from public.np_opening_hours where owner_id='${owner}' and weekday=7;
+    insert into public.np_opening_hours(owner_id,weekday,start_min,end_min) values('${owner}',7,0,360);`);
+  const within = [nextLastSunday(3), nextLastSunday(10)].filter(d => Date.parse(d) < Date.now() + 360 * 86400000);
+  assert.ok(within.length >= 1);
+  for (const sunday of within) {
+    const sql = await sqlSlots({ from: sunday, to: sunday });
+    assert.deepEqual(await domainSlots({ from: sunday, to: sunday }), sql, sunday);
+    const times = sql.map(D.parisLocal).map(x => x.slice(11));
+    assert.ok(!times.includes('02:00') && !times.includes('02:30') && times.includes('01:00') && times.includes('03:00'), `${sunday}: ${times}`);
+  }
+});
+test('database V2: R3 notice and horizon bound the slot list', async () => {
+  await asAdmin();
+  await db.exec(`update public.np_profiles set max_horizon_days=7, min_notice_min=10080 where owner_id='${owner}'`);
+  const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Paris' }).format(new Date());
+  assert.deepEqual(await sqlSlots({ from: today, to: today }), []);
+  assert.deepEqual(await sqlSlots({ from: D.addDays(day, 2), to: D.addDays(day, 2) }), []);
+});
+test('database V2: location rules — mobile pro, service restricted to studio, address required', async () => {
+  await asAdmin();
+  await db.exec(`update public.np_services set allowed_locations='pro' where id='${service}'`);
+  await assert.rejects(sqlSlots({ location: 'client' }), errCode('NP403'));
+  await asAdmin();
+  await db.exec(`update public.np_services set allowed_locations='both' where id='${service}'; update public.np_profiles set work_mode='mobile' where owner_id='${owner}'`);
+  await assert.rejects(sqlSlots({ location: 'pro' }), errCode('NP403'));
+  await asAnon();
+  await assert.rejects(request(await iso('10:00'), { p_location: 'client' }), errCode('NP422'));
+  const ok = (await request(await iso('10:00'), { p_location: 'client', p_address_line: '5 rue C', p_postal_code: '31200', p_city: 'Toulouse', p_access_info: 'Bât B' })).rows[0].r;
+  assert.equal(ok.location_type, 'client'); assert.equal(ok.city, 'Toulouse');
+  await as(owner);
+  const a = (await db.query(`select * from public.np_appointments where source='online'`)).rows[0];
+  assert.equal(a.buffer_before_min, 30); assert.equal(a.buffer_after_min, 30); assert.equal(a.access_info, 'Bât B');
+  assert.equal((await db.query(`select * from public.np_client_addresses where client_id=$1 and is_primary`, [a.client_id])).rows.length, 1);
+});
+test('database V2: concurrent requests for one slot — exactly one succeeds', async () => {
+  await asAnon();
+  const start = await iso('11:00');
+  const results = await Promise.allSettled([request(start, { p_phone: '0611111111' }), request(start, { p_phone: '0622222222' }), request(start, { p_phone: '0633333333' })]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.ok(results.filter(r => r.status === 'rejected').every(r => r.reason.code === 'NP409'));
+  await as(owner);
+  assert.equal((await db.query(`select * from public.np_appointments where starts_at=$1`, [start])).rows.length, 1);
+  // Direct pro insert on top of the pending request is refused too (buffers included).
+  await assert.rejects(db.exec(`insert into public.np_appointments(client_id,service_name,duration_min,starts_at) values('${client}','X',30,${at('12:05')})`), errCode('23P01'));
+});
+test('database V2: R5 pending expiry frees the slot, notifies, and blocks acceptance', async () => {
+  await asAnon();
+  const start = await iso('10:00');
+  await request(start);
+  await asAdmin();
+  await db.exec(`update public.np_appointments set expires_at=now()-interval '1 minute' where source='online'`);
+  await as(owner);
+  const id = (await db.query(`select id from public.np_appointments where source='online'`)).rows[0].id;
+  await assert.rejects(db.exec(`update public.np_appointments set status='booked' where id='${id}'`), /expiré/);
+  assert.ok((await sqlSlots()).includes(start), 'expired request no longer blocks');
+  await as(owner);
+  await db.exec('select public.np_refresh_notifications()');
+  const row = (await db.query(`select status, expired, cancel_reason, expires_at from public.np_appointments where id='${id}'`)).rows[0];
+  assert.deepEqual([row.status, row.expired, row.cancel_reason, row.expires_at], ['cancelled', true, 'Demande expirée', null]);
+  assert.deepEqual((await db.query(`select kind, status from public.np_notifications where appointment_id='${id}' order by kind`)).rows,
+    [{ kind: 'new_request', status: 'dismissed' }, { kind: 'request_expired', status: 'ready' }]);
+  await asAnon();
+  assert.equal((await request(start, { p_phone: '0644444444' })).rows[0].r.status, 'pending');
+});
+test('database V2: pending expiry = min(24 h, start − notice) and declining notifies', async () => {
+  await asAdmin();
+  await db.exec(`update public.np_profiles set min_notice_min=10070 where owner_id='${owner}'`); // ≈ 7 days minus 10 min
+  await asAnon();
+  const start = await iso('18:00');
+  const r = (await request(start)).rows[0].r;
+  assert.ok(Date.parse(r.expires_at) <= Date.parse(start) - 10070 * 60000 + 1000);
+  await as(owner);
+  await db.exec(`update public.np_appointments set status='cancelled', cancel_reason='Indisponible' where source='online'`);
+  assert.equal((await db.query(`select * from public.np_notifications where kind='confirmation' and status='ready'`)).rows.length, 1);
+});
+test('database V2: R5 cap of 3 pending per phone and 5 requests/hour per phone', async () => {
+  await asAnon();
+  for (const t of ['09:00', '10:30', '12:00']) await request(await iso(t));
+  await assert.rejects(request(await iso('14:00')), errCode('NP429'));
+  await asAdmin();
+  await db.exec(`truncate public.np_booking_attempts; delete from public.np_appointments; update public.np_profiles set auto_confirm=true where owner_id='${owner}'`);
+  await asAnon();
+  for (const t of ['09:00', '10:30', '12:00', '14:00', '15:30']) assert.equal((await request(await iso(t), { p_phone: '0655555555' })).rows[0].r.status, 'booked');
+  await assert.rejects(request(await iso('17:00'), { p_phone: '0655555555' }), errCode('NP429'));
+  await as(owner);
+  assert.equal((await db.query(`select * from public.np_clients where phone='+33655555555'`)).rows.length, 1, 'same phone attaches one client');
+  assert.equal((await db.query(`select * from public.np_notifications where kind='confirmation'`)).rows.length, 5);
+});
+test('database V2: returning client keeps earlier consent, gains new one, e-mail filled once', async () => {
+  await asAdmin();
+  await db.exec(`update public.np_clients set refill_opt_in=false where id='${client}'`);
+  await asAnon();
+  await request(await iso('09:00'), { p_phone: '0600000001', p_reminder_opt_in: false, p_refill_opt_in: true, p_email: 'a@b.fr' });
+  await as(owner);
+  const c = (await db.query(`select * from public.np_clients where id='${client}'`)).rows[0];
+  assert.deepEqual([c.reminder_opt_in, c.refill_opt_in, c.email, c.source], [true, true, 'a@b.fr', 'manual']);
+  assert.deepEqual((await db.query(`select kind, granted, source from public.np_consents where client_id='${client}' and source='online_form'`)).rows, [{ kind: 'refills', granted: true, source: 'online_form' }]);
+});
+test('database V2: opening hours and catalogue helpers are atomic and owner-scoped', async () => {
+  await db.exec(`select public.np_save_opening_hours('[{"weekday":1,"start_min":540,"end_min":720},{"weekday":1,"start_min":810,"end_min":1140}]'::jsonb)`);
+  assert.equal((await db.query('select * from public.np_opening_hours')).rows.length, 2);
+  await assert.rejects(db.exec(`select public.np_save_opening_hours('[{"weekday":2,"start_min":540,"end_min":720},{"weekday":2,"start_min":700,"end_min":800}]'::jsonb)`), /exclusion|conflicting/);
+  assert.equal((await db.query('select * from public.np_opening_hours')).rows.length, 2, 'rolled back');
+  await assert.rejects(db.exec(`select public.np_save_opening_hours('${JSON.stringify([0, 1, 2, 3].map(i => ({ weekday: 3, start_min: i * 120, end_min: i * 120 + 60 })))}'::jsonb)`), /Trois plages/);
+  await db.exec(`insert into public.np_services(id,trade,name,duration_min) values('00000000-0000-4000-8000-0000000000b1','nails','Pose',120)`);
+  await db.exec(`select public.np_reorder_services(array['00000000-0000-4000-8000-0000000000b1','${service}']::uuid[])`);
+  assert.deepEqual((await db.query('select name, position from public.np_services order by position')).rows, [{ name: 'Pose', position: 0 }, { name: 'Remplissage', position: 1 }]);
+  const page = (await db.query('select public.np_public_page($1) as p', [slug])).rows[0].p;
+  assert.deepEqual(page.services.map(s => s.name), ['Pose', 'Remplissage']);
+});
+test('database V2: slugs — reserved refused, availability, case-insensitive lookup', async () => {
+  await assert.rejects(db.exec(`update public.np_public_profiles set slug='admin'`), /check constraint/);
+  await assert.rejects(db.exec(`update public.np_public_profiles set slug='a--b'`), /check constraint/);
+  assert.equal((await db.query(`select public.np_slug_available('sofia-coiffure') as x`)).rows[0].x, false);
+  assert.equal((await db.query(`select public.np_slug_available($1) as x`, [slug])).rows[0].x, true, 'own slug');
+  assert.equal((await db.query(`select public.np_slug_available('nouveau-lien') as x`)).rows[0].x, true);
+  await asAnon();
+  assert.equal((await db.query(`select public.np_public_page(' INES-ONGLES ') as p`)).rows[0].p.slug, slug);
+});
+test('database V2: client deletion cascades addresses/notifications; account deletion unpublishes', async () => {
+  await book('done', "now() - interval '30 days'", { location_type: "'client'", address_line: "'2 rue A'", postal_code: "'31000'", city: "'Toulouse'" });
+  await db.exec(`insert into public.np_client_addresses(client_id,address_line,postal_code,city,is_primary) values('${client}','2 rue A','31000','Toulouse',true);
+    select public.np_refresh_notifications();`);
+  const exported = (await db.query(`select public.np_export_client('${client}') as x`)).rows[0].x;
+  assert.equal(exported.addresses.length, 1); assert.equal(exported.appointments.length, 1); assert.equal(exported.consents.length, 2);
+  await db.exec(`select public.np_delete_client('${client}')`);
+  for (const table of ['np_clients', 'np_client_addresses', 'np_notifications', 'np_consents'])
+    assert.equal((await db.query(`select * from public.${table} where owner_id='${owner}'`)).rows.length, 0, table);
+  const a = (await db.query(`select client_id, address_line, city, anonymized_at, price_cents from public.np_appointments`)).rows[0];
+  assert.deepEqual([a.client_id, a.address_line, a.city], [null, '', '']); assert.ok(a.anonymized_at);
+  await assert.rejects(db.exec(`select public.np_delete_client('${client}')`), errCode('NP404'));
+  await db.exec('select public.np_request_account_deletion()');
+  await asAnon();
+  assert.equal((await db.query('select public.np_public_page($1) as p', [slug])).rows[0].p, null);
+  await assert.rejects(sqlSlots(), errCode('NP404'));
+  await assert.rejects(request(await iso('10:00')), errCode('NP404'));
+});

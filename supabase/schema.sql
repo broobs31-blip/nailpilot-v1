@@ -809,8 +809,32 @@ begin
 end;
 $$;
 
+-- F3: replace the whole week atomically (delete + insert in one transaction, guards still apply).
+create function public.np_save_opening_hours(p_rows jsonb) returns void
+language plpgsql security invoker set search_path = '' as $$
+begin
+  if jsonb_typeof(coalesce(p_rows, '[]'::jsonb)) <> 'array' then
+    raise exception using errcode = 'NP422', message = 'Horaires invalides.';
+  end if;
+  delete from public.np_opening_hours h where h.owner_id = (select auth.uid());
+  insert into public.np_opening_hours(owner_id, weekday, start_min, end_min)
+  select (select auth.uid()), r.weekday, r.start_min, r.end_min
+  from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as r(weekday integer, start_min integer, end_min integer);
+end;
+$$;
+
+-- F4: complete ordering of the catalogue (position = index in p_ids). RLS limits it to own rows.
+create function public.np_reorder_services(p_ids uuid[]) returns void
+language sql security invoker set search_path = '' as $$
+  update public.np_services s set position = o.ord - 1
+  from unnest(p_ids) with ordinality as o(id, ord)
+  where s.id = o.id;
+$$;
+
 revoke all on function public.np_slug_available(text), public.np_export_client(uuid), public.np_delete_client(uuid),
-  public.np_export_account(), public.np_request_account_deletion() from public, anon, authenticated;
+  public.np_export_account(), public.np_request_account_deletion(), public.np_save_opening_hours(jsonb),
+  public.np_reorder_services(uuid[]) from public, anon, authenticated;
 grant execute on function public.np_slug_available(text), public.np_export_client(uuid), public.np_delete_client(uuid),
-  public.np_export_account(), public.np_request_account_deletion() to authenticated, service_role;
+  public.np_export_account(), public.np_request_account_deletion(), public.np_save_opening_hours(jsonb),
+  public.np_reorder_services(uuid[]) to authenticated, service_role;
 commit;

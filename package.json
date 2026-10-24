@@ -10,7 +10,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test tests/domain.test.js tests/database.test.js",
+    "test": "node --test tests/domain.test.js tests/database.test.js tests/store.test.js",
     "test:e2e": "playwright test"
   },
   "dependencies": {
