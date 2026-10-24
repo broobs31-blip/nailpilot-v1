@@ -16,11 +16,14 @@ export function hmRange(startIso, endIso) { return `${hm(startIso)} – ${hm(end
 const fmt = (options) => new Intl.DateTimeFormat('fr-FR', { timeZone: 'UTC', ...options });
 /** Libellé d'un jour local 'AAAA-MM-JJ' (aucun décalage : midi UTC). */
 export function dayLabel(day, options = { weekday: 'long', day: 'numeric', month: 'long' }) {
-  return fmt(options).format(new Date(`${day}T12:00:00Z`));
+  const label = fmt(options).format(new Date(`${day}T12:00:00Z`));
+  return options.day && options.month && day.slice(8) === '01' ? firstOfMonth(label) : label;
 }
+/** Usage français : « 1er novembre », jamais « 1 novembre ». */
+export const firstOfMonth = label => label.replace(/(^|\s)1(?=\s)/, '$11er');
 export function dateTimeLabel(iso) {
   const day = new Intl.DateTimeFormat('fr-FR', { timeZone: TIME_ZONE, weekday: 'long', day: 'numeric', month: 'long' }).format(new Date(iso));
-  return `${day} à ${hm(iso)}`;
+  return `${parisLocal(iso).slice(8, 10) === '01' ? firstOfMonth(day) : day} à ${hm(iso)}`;
 }
 export const capitalize = s => s ? s[0].toLocaleUpperCase('fr') + s.slice(1) : s;
 

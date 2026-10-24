@@ -1,7 +1,7 @@
 name: Verify NailPilot preview
 on:
   push:
-    branches: ['codex/**']
+    branches: ['codex/**', 'claude/**']
   pull_request:
     branches: [main]
 permissions:

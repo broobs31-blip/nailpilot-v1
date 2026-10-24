@@ -107,6 +107,8 @@ export async function mount(root) {
     document.title = `${TITLES[route.name] || 'NailPilot'} · NailPilot`;
     const main = root.querySelector('#main');
     try { view?.bind?.(main, ctx); } catch (error) { console.error(error); noticeError(error); }
+    // Le routeur lit le hash : « #main » ouvrirait « Page introuvable ». On déplace donc le focus sans toucher à l'URL.
+    root.querySelector('.skip-link')?.addEventListener('click', event => { event.preventDefault(); main.focus(); });
     root.querySelectorAll('[data-logout]').forEach(b => b.addEventListener('click', async () => {
       try { await store.logout(); navigate('connexion'); notice('Vous êtes déconnectée. À bientôt !'); } catch (error) { noticeError(error); }
     }));

@@ -2,6 +2,21 @@
 import { icon } from './icons.js';
 import { e, hm, clientName, minutesLabel, dateTimeLabel, capitalize } from './format.js';
 import { statusBadge } from './status-badge.js';
+import { appointmentWarnings } from '../domain.js';
+
+/** F3 : un RDV hors horaires (ou pendant une fermeture) reste visible, signalé par un badge. */
+export function isOutsideHours(a, store) {
+  if (!a || a.status === 'cancelled') return false;
+  const s = store?.state || {};
+  try { return appointmentWarnings(a, { profile: s.profile || undefined, openingHours: s.openingHours || [], closures: s.closures || [] }).some(w => w === 'outside_hours' || w === 'closed'); }
+  catch { return false; }
+}
+export function outsideHoursBadge(a, store, { compact = false } = {}) {
+  if (!isOutsideHours(a, store)) return '';
+  return compact
+    ? `<span class="badge badge-outside" title="Hors horaires">${icon('alert')}<span class="sr-only">Hors horaires</span></span>`
+    : '<span class="badge badge-outside">Hors horaires</span>';
+}
 
 export function locationLabel(a) {
   return a.location_type === 'client'
@@ -26,6 +41,6 @@ export function appointmentCard(a, store, { showDate = false, compact = false } 
       <span class="appt-service">${e(a.service_name || '')}</span>
       <span class="appt-meta">${locationLabel(a)}</span>
       ${compact ? '' : `<span class="appt-chips">${bufferChips(a)}</span>`}</span>
-    <span class="appt-status">${statusBadge(a.status, { expired: a.expired })}</span>
+    <span class="appt-status">${statusBadge(a.status, { expired: a.expired })}${outsideHoursBadge(a, store)}</span>
   </button>`;
 }

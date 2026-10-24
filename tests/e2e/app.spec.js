@@ -186,3 +186,65 @@ test('audit XSS : nom, bio, prestation, notes et adresse hostiles restent du tex
   await page.goto('/r/studio-demo');
   await expect(page.getByRole('heading', { level: 1 })).toContainText('<img src=x');
 });
+
+// Vérification finale 2026-10-24 : non-régression des bugs corrigés.
+test('accessibilité : « Aller au contenu » donne le focus au contenu sans ouvrir « Page introuvable »', async ({ page }) => {
+  await page.goto('/#/agenda/jour/2026-10-22');
+  await expect(page.getByRole('heading', { name: 'Jeudi 22 octobre' })).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.skip-link')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#\/agenda\/jour\/2026-10-22$/);
+  await expect(page.getByRole('heading', { name: 'Jeudi 22 octobre' })).toBeVisible();
+  await expect(page.locator('#main')).toBeFocused();
+});
+
+test('refus d’une demande : le message préparé est un refus, jamais « est confirmé »', async ({ page }) => {
+  await page.goto('/#/demandes');
+  await page.locator('.request', { hasText: 'Manon Petit' }).getByRole('button', { name: 'Refuser' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Refuser la demande' }).click();
+  await expect(page.getByRole('dialog').locator('[data-message]')).toHaveValue(/pas disponible/);
+  await page.getByRole('dialog').getByRole('button', { name: 'Terminé' }).click();
+  await page.goto('/#/messages/rappels');
+  const card = page.locator('.message-card', { hasText: 'Manon Petit' });
+  await expect(card.locator('.chip-plum')).toHaveText('Refus');
+  await expect(card.locator('[data-message]')).toHaveValue(/pas disponible/);
+  await expect(card.locator('[data-message]')).not.toHaveValue(/confirmé/);
+});
+
+test('F3 : un RDV hors horaires reste visible avec un badge, et le nom de la cliente tient dans un bloc de 45 min', async ({ page }, testInfo) => {
+  // Mercredi 21/10 : Camille Martin a un semi-permanent (45 min) demain jeudi 22 à 11 h. On ferme le jeudi.
+  // (Données modifiées directement : en émulation iPhone, Playwright ne juge jamais « stable » le bouton de l'écran Horaires.)
+  await page.goto('/#/aujourdhui');
+  await expect(page.locator('#main')).toBeVisible();
+  await page.evaluate(() => {
+    const data = JSON.parse(localStorage.getItem('nailpilot-demo-v2'));
+    data.openingHours = data.openingHours.filter(h => h.weekday !== 4);
+    localStorage.setItem('nailpilot-demo-v2', JSON.stringify(data));
+  });
+  await page.goto('/#/agenda/jour/2026-10-22');
+  await page.reload();
+  await expect(page.locator('.appt-card', { hasText: 'Camille Martin' }).locator('.badge-outside')).toHaveText('Hors horaires');
+  const block = page.locator('.tl-appt', { hasText: 'Camille Martin' });
+  await expect(block.locator('.badge-outside')).toBeVisible();
+  const name = await block.locator('.tl-client').boundingBox();
+  expect(name.height).toBeGreaterThan(10);
+  if (!isMobile(testInfo)) {
+    await page.goto('/#/agenda/semaine/2026-10-19');
+    await expect(page.locator('.week-body .tl-appt', { hasText: 'Camille Martin' }).locator('.badge-outside')).toHaveCount(1);
+  }
+});
+
+test('formulaires : messages de validation en français, quel que soit le navigateur', async ({ page }) => {
+  await page.goto('/#/prestations');
+  await page.getByRole('button', { name: /Nouvelle prestation/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Nouvelle prestation' });
+  await dialog.getByLabel('Nom', { exact: true }).fill('Test');
+  await dialog.getByLabel('Durée (min)').fill('7');
+  await dialog.getByLabel('Prix (€ TTC)').fill('20');
+  await dialog.getByRole('button', { name: 'Enregistrer' }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('Durée (min) : minimum 15.');
+  await dialog.getByLabel('Durée (min)').fill('62');
+  await dialog.getByRole('button', { name: 'Enregistrer' }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('Durée (min) : par pas de 5.');
+});

@@ -1,5 +1,5 @@
 // F7, F12 — fiches clientes : recherche, coordonnées, adresses, préférences, consentements, export, suppression.
-import { CLIENT_SOURCES, HEALTH_WARNING, whatsappLink, mapsLink, toCsv, formatPrice } from '../domain.js';
+import { CLIENT_SOURCES, HEALTH_WARNING, STATUSES, whatsappLink, mapsLink, toCsv, formatPrice, parisLocal } from '../domain.js';
 import { icon } from '../components/icons.js';
 import { e, initials, phoneDisplay, capitalize, dateTimeLabel, download, today } from '../components/format.js';
 import { openDialog, confirmDialog } from '../components/dialog.js';
@@ -105,6 +105,18 @@ function detail(ctx, id) {
   </section>`;
 }
 
+/** F7 — CSV d'une fiche : identité de la cliente sur chaque ligne + son historique (une ligne même sans rendez-vous). */
+export function clientCsv(data = {}) {
+  const c = data.client || {};
+  const base = { cliente: c.name || '', prenom_usage: c.preferred_name || '', telephone: c.phone || '', email: c.email || '', notes: c.notes || '', rappels_acceptes: c.reminder_opt_in ? 'oui' : 'non', relances_acceptees: c.refill_opt_in ? 'oui' : 'non' };
+  const empty = { date: '', prestation: '', duree_min: '', prix_cents: '', lieu: '', adresse: '', statut: '' };
+  const rows = (data.appointments || []).map(a => ({
+    ...base, date: safe(() => parisLocal(a.starts_at).replace('T', ' '), a.starts_at), prestation: a.service_name, duree_min: a.duration_min, prix_cents: a.price_cents ?? '',
+    lieu: a.location_type === 'client' ? 'chez la cliente' : 'chez la pro', adresse: a.location_type === 'client' ? addressText(a) : '', statut: STATUSES[a.status] || a.status
+  }));
+  return toCsv(rows.length ? rows : [{ ...base, ...empty }]);
+}
+
 export function clientDialog(ctx, client, { onSaved } = {}) {
   const c = client || { refill_days: 21, source: 'manual' };
   openDialog({
@@ -167,7 +179,7 @@ export function bind(root, ctx) {
       const data = await store.exportClient(id);
       const slug = c.name.toLocaleLowerCase('fr').normalize('NFD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'cliente';
       if (b.dataset.export === 'json') download(`nailpilot-${slug}.json`, JSON.stringify(data, null, 2));
-      else download(`nailpilot-${slug}.csv`, toCsv((data.appointments || []).map(a => ({ date: a.starts_at, prestation: a.service_name, duree_min: a.duration_min, prix_cents: a.price_cents ?? '', lieu: a.location_type, statut: a.status }))), 'text/csv');
+      else download(`nailpilot-${slug}.csv`, clientCsv(data), 'text/csv');
       ctx.notice('Export prêt.');
     } catch (error) { ctx.noticeError(error); }
   }));

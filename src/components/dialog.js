@@ -47,7 +47,7 @@ export function openDialog(options) {
     if (busy || !onSubmit) return;
     if (!form.checkValidity()) {
       const invalid = form.querySelector(':invalid');
-      api.setError(invalid?.validationMessage ? `${labelOf(invalid)}${invalid.validationMessage}` : 'Vérifiez le formulaire.');
+      api.setError(invalid ? `${labelOf(invalid)}${validationText(invalid)}` : 'Vérifiez le formulaire.');
       invalid?.focus();
       return;
     }
@@ -70,6 +70,21 @@ export function openDialog(options) {
   const first = dialog.querySelector('[autofocus]') || dialog.querySelector('.dialog-body input:not([type=hidden]):not([type=checkbox]):not([type=radio]), .dialog-body select, .dialog-body textarea');
   (first || dialog.querySelector('[data-close]')).focus();
   return api;
+}
+
+/** Message en français quelle que soit la langue du navigateur (validationMessage suit la langue de l'interface). */
+export function validationText(input) {
+  const v = input.validity || {};
+  if (v.valueMissing) return input.type === 'checkbox' ? 'cochez cette case.' : 'ce champ est obligatoire.';
+  if (v.typeMismatch) return input.type === 'email' ? 'adresse e-mail invalide.' : 'format invalide.';
+  if (v.badInput) return 'saisissez un nombre.';
+  if (v.rangeUnderflow) return `minimum ${input.min}.`;
+  if (v.rangeOverflow) return `maximum ${input.max}.`;
+  if (v.stepMismatch) return input.type === 'number' && Number(input.step) >= 1 ? `par pas de ${input.step}.` : 'valeur invalide.';
+  if (v.tooShort) return `${input.minLength} caractères minimum.`;
+  if (v.tooLong) return `${input.maxLength} caractères maximum.`;
+  if (v.patternMismatch) return 'format invalide.';
+  return 'valeur invalide.';
 }
 
 function labelOf(input) {

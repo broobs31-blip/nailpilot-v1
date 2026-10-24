@@ -154,6 +154,9 @@ input[type=checkbox], input[type=radio] { accent-color: var(--plum); width: 20px
 .badge-cancelled { background: #f6eded; color: #8a2e2e; border-color: #e5c4c4; }
 .badge-no_show { background: #fdebe4; color: #8f2f0b; border-color: #f2bfa9; }
 .badge-expired { background: #f1efef; color: #5c5656; border-color: #ddd8d8; }
+.badge-outside { background: var(--warn-bg); color: var(--warn); border-color: #edc97e; gap: 4px; }
+.badge-outside .icon { width: 13px; height: 13px; }
+.appt-status { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .chip { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 2px 10px; border-radius: 99px; background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; font-weight: 600; white-space: nowrap; text-decoration: none; }
 .chip .icon { width: 14px; height: 14px; }
 .chip-plum { background: var(--plum-100); color: var(--plum-700); }
@@ -331,7 +334,9 @@ input[type=checkbox], input[type=radio] { accent-color: var(--plum); width: 20px
 .tl-body { flex: 1 1 0; min-height: 22px; display: flex; flex-direction: column; gap: 1px; padding: 5px 10px; text-align: left; background: var(--plum-50); border-left: 4px solid var(--plum); overflow: hidden; }
 .tl-body:hover { background: var(--plum-100); }
 .tl-time { font-size: 12px; font-weight: 700; color: var(--plum-700); font-variant-numeric: tabular-nums; }
-.tl-client { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-client { flex-shrink: 0; font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-time { flex-shrink: 0; display: flex; align-items: center; gap: 4px; }
+.tl-time .badge-outside { height: 16px; padding: 0 4px; }
 .tl-service { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-meta { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .tl-meta .icon { width: 14px; height: 14px; color: var(--plum); }

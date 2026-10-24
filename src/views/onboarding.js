@@ -4,6 +4,7 @@ import { icon, tradeIcon } from '../components/icons.js';
 import { e, formValues } from '../components/format.js';
 import { addressFields, pickAddress } from '../components/address-fields.js';
 import { isValidSlug } from '../router.js';
+import { validationText } from '../components/dialog.js';
 
 let step = 1;
 let draft = null;
@@ -124,7 +125,7 @@ export function bind(root, ctx) {
       if (!draft.base_city) draft.base_city = draft.city;
       step = 2; ctx.rerender(); root.querySelector('h1')?.focus(); return;
     }
-    if (!form.checkValidity()) { const bad = form.querySelector(':invalid'); return fail(`${bad.labels?.[0]?.querySelector('.label-text')?.textContent || 'Ce champ'} : ${bad.validationMessage}`, bad); }
+    if (!form.checkValidity()) { const bad = form.querySelector(':invalid'); return fail(`${bad.labels?.[0]?.querySelector('.label-text')?.textContent || 'Ce champ'} : ${validationText(bad)}`, bad); }
     if (step === 2) { step = 3; ctx.rerender(); root.querySelector('h1')?.focus(); return; }
     const submit = form.querySelector('[type=submit]');
     submit.disabled = true; submit.setAttribute('aria-busy', 'true');

@@ -1,8 +1,9 @@
 // Frise horaire (agenda jour et colonnes semaine) : plages fermées grisées, tampons hachurés.
-import { isoWeekday, fromParisLocal } from '../domain.js';
+import { isoWeekday, fromParisLocal, addDays } from '../domain.js';
 import { e, hm, localDay, localMinutes, minutesLabel, clientName, today } from './format.js';
 import { icon } from './icons.js';
 import { statusBadge } from './status-badge.js';
+import { outsideHoursBadge } from './appointment-card.js';
 
 export const PX = 1.15; // pixels par minute
 
@@ -29,7 +30,8 @@ export function openRanges(store, day) {
   try { weekday = isoWeekday(day); } catch { weekday = ((new Date(`${day}T12:00:00Z`).getUTCDay() + 6) % 7) + 1; }
   let ranges = (store.state.openingHours || []).filter(h => h.weekday === weekday).map(h => [h.start_min, h.end_min]).sort((x, y) => x[0] - y[0]);
   let dayStart, dayEnd;
-  try { dayStart = Date.parse(fromParisLocal(`${day}T00:00`)); dayEnd = dayStart + 86400000; } catch { return ranges; }
+  // Jour de 23 h ou 25 h au changement d'heure : la fin est le minuit local suivant, pas début + 24 h.
+  try { dayStart = Date.parse(fromParisLocal(`${day}T00:00`)); dayEnd = Date.parse(fromParisLocal(`${addDays(day, 1)}T00:00`)); } catch { return ranges; }
   for (const c of store.state.closures || []) {
     const cs = Date.parse(c.starts_at), ce = Date.parse(c.ends_at);
     if (ce <= dayStart || cs >= dayEnd) continue;
@@ -86,7 +88,7 @@ export function dayColumn(store, day, [start, end], { compact = false } = {}) {
     return `<div class="tl-appt status-${e(a.status)}${a.expired ? ' is-expired' : ''}" data-top="${top}" data-height="${h}">
       ${before ? `<div class="tl-buffer tl-buffer-before" data-flex="${before}" title="${e(bufferLabel(before, 'avant'))}"><span>${icon(travel ? 'car' : 'clock')}${compact ? '' : e(bufferLabel(before, 'avant'))}</span></div>` : ''}
       <button type="button" class="tl-body" data-appointment="${e(a.id)}" data-flex="${a.duration_min || (Date.parse(b.ends_at) - Date.parse(b.starts_at)) / 60000}">
-        <span class="tl-time">${e(hm(a.starts_at))}${compact ? '' : ` – ${e(hm(b.ends_at))}`}</span>
+        <span class="tl-time">${e(hm(a.starts_at))}${compact ? '' : ` – ${e(hm(b.ends_at))}`}${outsideHoursBadge(a, store, { compact: true })}</span>
         <strong class="tl-client">${e(who)}</strong>
         ${compact ? '' : `<span class="tl-service">${e(a.service_name || '')}</span>`}
         <span class="tl-meta">${icon(travel ? 'car' : 'home')}${compact ? '' : `<span>${travel ? e(a.city || 'Chez la cliente') : 'Chez moi'}</span>`}${a.status !== 'booked' ? statusBadge(a.status, { expired: a.expired }) : ''}</span>

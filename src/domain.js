@@ -621,7 +621,7 @@ export function buildMessage(kind, { appointment = {}, client = {}, profile = {}
   const starts = appointment.starts_at;
   const vars = {
     prenom: firstName(client),
-    date: starts ? formatDate(starts, { weekday: 'long', day: 'numeric', month: 'long', hour: undefined, minute: undefined }) : '',
+    date: starts ? formatDate(starts, { weekday: 'long', day: 'numeric', month: 'long', hour: undefined, minute: undefined }).replace(/(^|\s)1(?=\s)/, '$11er') : '',
     heure: starts ? formatTime(starts) : '',
     prestation: String(appointment.service_name || appointment.service || '').toLowerCase(),
     adresse: locationPhrase(appointment, profile, publicProfile),

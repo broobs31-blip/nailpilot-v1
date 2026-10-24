@@ -27,8 +27,10 @@ export function render(ctx) {
     ${rows.length ? `<ul class="message-list">${rows.map(n => {
       const a = s.appointments.find(x => x.id === n.appointment_id);
       const client = s.clients.find(c => c.id === n.client_id);
-      const msgKind = n.kind === 'refill' ? 'refill' : n.kind === 'confirmation' ? 'confirmation' : 'reminder';
-      return `<li class="card message-card"><header class="message-head"><div><span class="chip chip-plum">${e(LABELS[n.kind] || n.kind)}</span><h2 class="card-title">${e(clientName(store, n.client_id))}</h2>
+      // La base range sous « confirmation » la réponse à une demande, acceptée OU refusée : un refus ne doit jamais dire « confirmé ».
+      const declined = n.kind === 'confirmation' && a?.status === 'cancelled';
+      const msgKind = n.kind === 'refill' ? 'refill' : declined ? 'decline' : n.kind === 'confirmation' ? 'confirmation' : 'reminder';
+      return `<li class="card message-card"><header class="message-head"><div><span class="chip chip-plum">${e(declined ? 'Refus' : LABELS[n.kind] || n.kind)}</span><h2 class="card-title">${e(clientName(store, n.client_id))}</h2>
           <p class="muted">${a ? `${e(a.service_name)} · ${e(capitalize(dateTimeLabel(a.starts_at)))}` : ''}</p></div></header>
         ${a ? messageActions({ text: messageFor(ctx, msgKind, a), phone: client?.phone || '', label: 'Message à envoyer' }) : ''}
         ${history ? '<p class="hint">Marqué comme traité (cela ne garantit pas l’envoi).</p>' : `<button type="button" class="btn btn-ghost btn-sm" data-dismiss="${e(n.id)}">${icon('check')}Marquer comme traité</button>`}</li>`;
