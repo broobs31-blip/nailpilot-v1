@@ -39,7 +39,7 @@ export function render(ctx) {
   ].filter(Boolean);
   const hour = Number(new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
   const hello = hour < 5 || hour >= 18 ? 'Bonsoir' : 'Bonjour';
-  const firstName = (pub.display_name || '').split(/\s+/)[0];
+  const firstName = pub.display_name || '';
 
   const nextCard = next ? (() => {
     const b = bounds(next);
@@ -71,7 +71,7 @@ export function render(ctx) {
 
   return `<section class="page today-page">
     <header class="page-head">
-      <div><p class="eyebrow">${e(capitalize(dayLabel(day)))}</p><h1>${hello}${firstName ? ` ${e(firstName)}` : ''}</h1>
+      <div><p class="eyebrow">${e(capitalize(dayLabel(day)))}</p><h1>${hello}${firstName ? `, ${e(firstName)}` : ''}</h1>
         <p class="lead">${todays.length ? `${todays.length} rendez-vous aujourd’hui${travel ? `, dont ${e(minutesLabel(travel))} de trajet bloqué` : ''}.` : 'Aucun rendez-vous aujourd’hui.'}</p></div>
       <button type="button" class="btn btn-primary btn-new" data-new>${icon('plus')}<span>Nouveau RDV</span></button>
     </header>

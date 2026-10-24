@@ -22,7 +22,7 @@ function initDraft(store) {
     work_mode: p.work_mode || 'home_studio',
     base_address_line: p.base_address_line || '', base_postal_code: p.base_postal_code || '', base_city: p.base_city || '', base_access_info: p.base_access_info || '',
     zone_postal_codes: (p.zone_postal_codes || []).join(', '), zone_radius_km: p.zone_radius_km ?? '', travel_buffer_min: p.travel_buffer_min ?? 30,
-    slug: pub.slug || '', seed: !(store.state.services || []).some(s => !s.archived), hours: (store.state.openingHours || []).length ? 'keep' : 'tue-sat',
+    slug: pub.slug || '', origName: pub.display_name || '', slugEdited: false, seed: !(store.state.services || []).some(s => !s.archived), hours: (store.state.openingHours || []).length ? 'keep' : 'tue-sat',
     published: true
   };
 }
@@ -55,7 +55,7 @@ export function render(ctx) {
         <label class="field"><span class="label-text">Trajet entre deux clientes (min)</span><input name="travel_buffer_min" type="number" min="0" max="120" step="5" value="${e(draft.travel_buffer_min)}" required inputmode="numeric"></label></div>
         <p class="hint">${icon('car')} Ce temps est bloqué avant et après chaque rendez-vous à domicile, sans être compté deux fois entre deux clientes.</p></fieldset>` : ''}`;
   } else {
-    const suggestion = draft.slug || safeSlugify(draft.display_name);
+    const suggestion = draft.slugEdited || (draft.slug && draft.display_name === draft.origName) ? draft.slug : safeSlugify(draft.display_name);
     const catalog = draft.trades.flatMap(t => (DEFAULT_CATALOG[t] || []).map(s => ({ ...s, trade: t })));
     body = `<p class="eyebrow">Étape 3 sur 3</p><h1>Votre page de réservation</h1>
       <p class="lead">C’est le lien à mettre dans votre bio Instagram.</p>
@@ -110,7 +110,7 @@ export function bind(root, ctx) {
     } catch (err) { status.textContent = err.message; status.className = 'hint hint-error'; return false; }
   };
   if (slugInput) {
-    slugInput.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(checkSlug, 350); });
+    slugInput.addEventListener('input', () => { draft.slugEdited = true; clearTimeout(timer); timer = setTimeout(checkSlug, 350); });
     checkSlug();
   }
   form.addEventListener('submit', async event => {

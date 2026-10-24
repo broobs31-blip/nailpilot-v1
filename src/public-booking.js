@@ -57,7 +57,7 @@ export async function mount(root, slug) {
     const groups = [...new Set(services.map(s => s.trade || ''))];
     const card = s => `<li><button type="button" class="pb-service${st.service?.id === s.id ? ' is-selected' : ''}" data-service="${e(s.id)}">
       <span class="pb-service-main"><strong>${e(s.name)}</strong>${s.description ? `<span class="pb-desc">${e(s.description)}</span>` : ''}
-        <span class="pb-meta">${icon('clock')}${e(safe(() => formatDuration(s.duration_min), `${s.duration_min} min`))}${locationsFor(s).map(l => ` · ${icon(l === 'pro' ? 'home' : 'car')}${l === 'pro' ? 'Chez moi' : 'À domicile'}`).join('')}</span></span>
+        <span class="pb-meta"><span class="pb-loc">${icon('clock')}${e(safe(() => formatDuration(s.duration_min), `${s.duration_min} min`))}</span>${locationsFor(s).map(l => `<span class="pb-loc">${icon(l === 'pro' ? 'home' : 'car')}${l === 'pro' ? 'Chez elle' : 'À domicile'}</span>`).join('')}</span></span>
       <span class="pb-price">${e(safe(() => formatPrice(s.price_cents ?? null), ''))}</span>${icon('chevronRight')}</button></li>`;
     if (!services.length) return `<section class="pb-card"><h2 tabindex="-1" data-step-title>Aucune prestation en ligne</h2><p class="muted">Contactez directement ${e(page.display_name)} pour prendre rendez-vous.</p></section>`;
     return `<section class="pb-card"><h2 tabindex="-1" data-step-title>Choisissez votre prestation</h2>
